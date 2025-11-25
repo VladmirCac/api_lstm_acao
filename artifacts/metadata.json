@@ -1,0 +1,20 @@
+{
+  "lookback": 20,
+  "feature_order": [
+    "open_amzn",
+    "high_amzn",
+    "low_amzn",
+    "close_amzn",
+    "volume_amzn",
+    "return_1d",
+    "return_5d",
+    "ma_5",
+    "ma_10",
+    "ma_20",
+    "vol_10",
+    "price_range",
+    "volume_trend"
+  ],
+  "target_column": "close_amzn",
+  "close_idx": 3
+}
