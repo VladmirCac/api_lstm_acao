@@ -24,4 +24,6 @@ COPY artifacts ./artifacts
 # Porta padrão do uvicorn
 EXPOSE 8000
 
+EXPOSE 9000
+
 CMD ["uvicorn", "serve:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -8,3 +8,4 @@ joblib
 tensorflow-cpu
 yfinance
 curl-cffi
+prometheus_client

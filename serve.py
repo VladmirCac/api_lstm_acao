@@ -13,6 +13,13 @@ import yfinance as yf
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import uvicorn
+from prometheus_client import (
+    Histogram,
+    Counter,
+    ProcessCollector,
+    REGISTRY,
+    start_http_server,
+)
 
 # Paths for artifacts
 ARTEFACT_DIR = Path("artifacts")
@@ -35,6 +42,31 @@ try:
     _TzDBManager.set_location(str(YF_CACHE_DIR))
 except Exception as exc:
     logger.warning("Falha ao configurar cache do yfinance: %s", exc)
+
+# Métricas Prometheus (evita duplicar em reload)
+if "request_latency_seconds" in REGISTRY._names_to_collectors:
+    REQ_LATENCY = REGISTRY._names_to_collectors["request_latency_seconds"]
+else:
+    REQ_LATENCY = Histogram(
+        "request_latency_seconds", "Latência das requisições por rota", ["path"]
+    )
+
+if "request_errors_total" in REGISTRY._names_to_collectors:
+    REQ_ERRORS = REGISTRY._names_to_collectors["request_errors_total"]
+else:
+    REQ_ERRORS = Counter("request_errors_total", "Erros por rota", ["path"])
+
+try:
+    ProcessCollector()  # CPU/memória do processo
+except ValueError:
+    # Ignora se já registrado (ex.: reload do app)
+    pass
+
+try:
+    start_http_server(9000)  # expõe /metrics em 9000
+except OSError:
+    # Porta já em uso (ex.: reload) – ignore
+    pass
 
 class PredictRequest(BaseModel):
     """
@@ -177,28 +209,37 @@ def health():
     response_description="Previsão normalizada, em preço e calibrada",
 )
 def predict(req: PredictRequest):
-    if len(req.rows) < LOOKBACK:
-        raise HTTPException(
-            status_code=400, detail=f"É necessário pelo menos {LOOKBACK} registros."
-        )
+    path_label = "/predict"
+    with REQ_LATENCY.labels(path_label).time():
+        try:
+            if len(req.rows) < LOOKBACK:
+                raise HTTPException(
+                    status_code=400, detail=f"É necessário pelo menos {LOOKBACK} registros."
+                )
 
-    df = pd.DataFrame(req.rows)
-    missing = set(FEATURE_ORDER) - set(df.columns)
-    if missing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Faltam colunas: {sorted(missing)}. Esperado: {FEATURE_ORDER}",
-        )
+            df = pd.DataFrame(req.rows)
+            missing = set(FEATURE_ORDER) - set(df.columns)
+            if missing:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Faltam colunas: {sorted(missing)}. Esperado: {FEATURE_ORDER}",
+                )
 
-    df = df[FEATURE_ORDER].tail(LOOKBACK)
-    y_pred_norm, y_pred_price, y_pred_price_cal = predict_from_dataframe(df)
+            df = df[FEATURE_ORDER].tail(LOOKBACK)
+            y_pred_norm, y_pred_price, y_pred_price_cal = predict_from_dataframe(df)
 
-    return {
-        "prediction_normalized": float(y_pred_norm),
-        "prediction_price": float(y_pred_price),
-        "prediction_price_calibrated": float(y_pred_price_cal),
-        "lookback_used": LOOKBACK,
-    }
+            return {
+                "prediction_normalized": float(y_pred_norm),
+                "prediction_price": float(y_pred_price),
+                "prediction_price_calibrated": float(y_pred_price_cal),
+                "lookback_used": LOOKBACK,
+            }
+        except HTTPException:
+            REQ_ERRORS.labels(path_label).inc()
+            raise
+        except Exception:
+            REQ_ERRORS.labels(path_label).inc()
+            raise
 
 @app.get(
     "/predict_live",
@@ -210,46 +251,50 @@ def predict_live(ticker: str = "AMZN"):
     Busca dados recentes do yfinance, gera features e retorna previsão usando somente dados online.
     - `ticker`: símbolo (default AMZN).
     """
-    # Tenta baixar do yfinance com a mesma configuração do treino_notbook
-    end_date = datetime.now(timezone.utc).date()
-    # Baixa mais dias corridos para compensar dias sem pregão e perdas por rolling/dropna
-    start_date = end_date - timedelta(days=max(LOOKBACK * 4, 90))
+    path_label = "/predict_live"
+    with REQ_LATENCY.labels(path_label).time():
+        # Tenta baixar do yfinance com a mesma configuração do treino_notbook
+        end_date = datetime.now(timezone.utc).date()
+        # Baixa mais dias corridos para compensar dias sem pregão e perdas por rolling/dropna
+        start_date = end_date - timedelta(days=max(LOOKBACK * 4, 90))
 
-    df_raw = yf.download(
-        tickers=ticker,
-        start=start_date.isoformat(),
-        end=(end_date + timedelta(days=1)).isoformat(),  # end é exclusivo
-        interval="1d",
-        auto_adjust=True,
-        actions=True,
-        group_by="column",
-        progress=False,
-        threads=True,
-    )
-   
-    if df_raw is None or df_raw.empty:
-        logger.error(
-            "yfinance retornou vazio",
-            extra={"ticker": ticker, "start": start_date.isoformat(), "end": end_date.isoformat()},
+        df_raw = yf.download(
+            tickers=ticker,
+            start=start_date.isoformat(),
+            end=(end_date + timedelta(days=1)).isoformat(),  # end é exclusivo
+            interval="1d",
+            auto_adjust=True,
+            actions=True,
+            group_by="column",
+            progress=False,
+            threads=True,
         )
-        raise HTTPException(status_code=500, detail="Sem dados retornados do yfinance.")
+       
+        if df_raw is None or df_raw.empty:
+            logger.error(
+                "yfinance retornou vazio",
+                extra={"ticker": ticker, "start": start_date.isoformat(), "end": end_date.isoformat()},
+            )
+            REQ_ERRORS.labels(path_label).inc()
+            raise HTTPException(status_code=500, detail="Sem dados retornados do yfinance.")
 
-    try:
-        # Normaliza colunas como no notebook antes de gerar features
-        df_feat = build_features(df_raw)
-        y_pred_norm, y_pred_price, y_pred_price_cal = predict_from_dataframe(df_feat)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+        try:
+            # Normaliza colunas como no notebook antes de gerar features
+            df_feat = build_features(df_raw)
+            y_pred_norm, y_pred_price, y_pred_price_cal = predict_from_dataframe(df_feat)
+        except Exception as exc:
+            REQ_ERRORS.labels(path_label).inc()
+            raise HTTPException(status_code=500, detail=str(exc))
 
-    return {
-        "ticker": ticker,
-        "rows_used": LOOKBACK,
-        "prediction_normalized": float(y_pred_norm),
-        "prediction_price": float(y_pred_price),
-        "prediction_price_calibrated": float(y_pred_price_cal),
-        "features_rows_available": int(len(df_feat)),
-        "source": "yfinance",
-    }
+        return {
+            "ticker": ticker,
+            "rows_used": LOOKBACK,
+            "prediction_normalized": float(y_pred_norm),
+            "prediction_price": float(y_pred_price),
+            "prediction_price_calibrated": float(y_pred_price_cal),
+            "features_rows_available": int(len(df_feat)),
+            "source": "yfinance",
+        }
 
 
 if __name__ == "__main__":
