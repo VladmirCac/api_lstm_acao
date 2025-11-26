@@ -24,12 +24,12 @@ Endpoints:
 - Inclua `requirements.txt` e `Procfile` com `web: uvicorn serve:app --host 0.0.0.0 --port $PORT`.
 - Commit/push para o GitHub e conecte o repositório no Railway; configure a branch de deploy.
 - Certifique-se de que `artifacts/` está versionada ou disponível em um Volume.
-- Métricas Prometheus expostas em `:9000/metrics` (ver abaixo para instrumentação).
+- Métricas Prometheus expostas em `/metrics` (mesma porta da API).
 
 ## Deploy via Docker
 - Build: `docker build -t lstm-api .`
-- Run: `docker run --rm -p 8000:8000 -p 9000:9000 lstm-api`
-- Teste: `http://localhost:8000/health` e `/docs`; métricas em `http://localhost:9000/metrics`
+- Run: `docker run --rm -p 8000:8000 lstm-api`
+- Teste: `http://localhost:8000/health` e `/docs`; métricas em `http://localhost:8000/metrics`
 
 > Observação: a imagem inclui `artifacts/` (modelo e scaler). Se quiser montar artefatos externos, use volume:  
 > `docker run --rm -p 8000:8000 -v $(pwd)/artifacts:/app/artifacts lstm-api`

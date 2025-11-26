@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import yfinance as yf
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from pydantic import BaseModel, Field
 import uvicorn
 from prometheus_client import (
@@ -18,7 +18,8 @@ from prometheus_client import (
     Counter,
     ProcessCollector,
     REGISTRY,
-    start_http_server,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
 )
 
 # Paths for artifacts
@@ -60,12 +61,6 @@ try:
     ProcessCollector()  # CPU/memória do processo
 except ValueError:
     # Ignora se já registrado (ex.: reload do app)
-    pass
-
-try:
-    start_http_server(9000)  # expõe /metrics em 9000
-except OSError:
-    # Porta já em uso (ex.: reload) – ignore
     pass
 
 class PredictRequest(BaseModel):
@@ -201,6 +196,17 @@ def predict_from_dataframe(df_feat: pd.DataFrame):
 )
 def health():
     return {"status": "ok", "lookback": LOOKBACK, "features": FEATURE_ORDER}
+
+
+@app.get(
+    "/metrics",
+    summary="Métricas Prometheus",
+    response_description="Métricas no formato Prometheus",
+)
+def metrics():
+    # Expoe métricas na mesma porta da API (necessário em ambientes que não suportam porta extra)
+    data = generate_latest(REGISTRY)
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post(
