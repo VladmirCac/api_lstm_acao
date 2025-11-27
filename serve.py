@@ -20,7 +20,6 @@ import uvicorn
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 import psutil
-from sentry_sdk import metrics
 
 load_dotenv()  # carrega variáveis de ambiente locais (.env) para testes
 
@@ -142,12 +141,6 @@ async def sentry_resource_metrics(request, call_next):
             scope.set_tag("http.path", path)
             scope.set_tag("http.method", method)
             scope.set_tag("http.status_code", status)
-
-        # Envia métricas agregáveis para a aba Metrics do Sentry
-        base_tags = {"path": path, "method": method, "status": str(status)}
-        metrics.distribution("api.request.duration_ms", duration_ms, tags=base_tags, unit="millisecond")
-        metrics.distribution("api.request.cpu_ms", cpu_ms, tags=base_tags, unit="millisecond")
-        metrics.gauge("api.process.mem_mb", mem_mb, tags={"path": path, "method": method}, unit="megabyte")
 
 
 def invert_scale(values: np.ndarray) -> np.ndarray:
