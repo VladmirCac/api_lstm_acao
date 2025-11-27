@@ -13,19 +13,23 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import yfinance as yf
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import uvicorn
-from prometheus_client import (
-    Histogram,
-    Counter,
-    ProcessCollector,
-    REGISTRY,
-    generate_latest,
-    CONTENT_TYPE_LATEST,
-)
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
 
 load_dotenv()  # carrega variáveis de ambiente locais (.env) para testes
+
+sentry_sdk.init(
+    dsn=os.getenv("SENTRY_DSN"),
+    traces_sample_rate=1.0,
+    profile_session_sample_rate=1.0,
+    environment=os.getenv("SENTRY_ENVIRONMENT"),
+    enable_logs=True,
+    send_default_pii=True,
+    profile_lifecycle="trace",
+)
 
 # Paths for artifacts
 ARTEFACT_DIR = Path("artifacts")
@@ -48,25 +52,6 @@ try:
     _TzDBManager.set_location(str(YF_CACHE_DIR))
 except Exception as exc:
     logger.warning("Falha ao configurar cache do yfinance: %s", exc)
-
-# Métricas Prometheus (evita duplicar em reload)
-if "request_latency_seconds" in REGISTRY._names_to_collectors:
-    REQ_LATENCY = REGISTRY._names_to_collectors["request_latency_seconds"]
-else:
-    REQ_LATENCY = Histogram(
-        "request_latency_seconds", "Latência das requisições por rota", ["path"]
-    )
-
-if "request_errors_total" in REGISTRY._names_to_collectors:
-    REQ_ERRORS = REGISTRY._names_to_collectors["request_errors_total"]
-else:
-    REQ_ERRORS = Counter("request_errors_total", "Erros por rota", ["path"])
-
-try:
-    ProcessCollector()  # CPU/memória do processo
-except ValueError:
-    # Ignora se já registrado (ex.: reload do app)
-    pass
 
 class PredictRequest(BaseModel):
     """
@@ -203,54 +188,34 @@ def health():
     return {"status": "ok", "lookback": LOOKBACK, "features": FEATURE_ORDER}
 
 
-@app.get(
-    "/metrics",
-    summary="Métricas Prometheus",
-    response_description="Métricas no formato Prometheus",
-)
-def metrics():
-    # Expoe métricas na mesma porta da API (necessário em ambientes que não suportam porta extra)
-    data = generate_latest(REGISTRY)
-    return Response(content=data, media_type=CONTENT_TYPE_LATEST)
-
-
 @app.post(
     "/predict",
     summary="Prever próximo preço",
     response_description="Previsão normalizada, em preço e calibrada",
 )
 def predict(req: PredictRequest):
-    path_label = "/predict"
-    with REQ_LATENCY.labels(path_label).time():
-        try:
-            if len(req.rows) < LOOKBACK:
-                raise HTTPException(
-                    status_code=400, detail=f"É necessário pelo menos {LOOKBACK} registros."
-                )
+    if len(req.rows) < LOOKBACK:
+        raise HTTPException(
+            status_code=400, detail=f"É necessário pelo menos {LOOKBACK} registros."
+        )
 
-            df = pd.DataFrame(req.rows)
-            missing = set(FEATURE_ORDER) - set(df.columns)
-            if missing:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Faltam colunas: {sorted(missing)}. Esperado: {FEATURE_ORDER}",
-                )
+    df = pd.DataFrame(req.rows)
+    missing = set(FEATURE_ORDER) - set(df.columns)
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Faltam colunas: {sorted(missing)}. Esperado: {FEATURE_ORDER}",
+        )
 
-            df = df[FEATURE_ORDER].tail(LOOKBACK)
-            y_pred_norm, y_pred_price, y_pred_price_cal = predict_from_dataframe(df)
+    df = df[FEATURE_ORDER].tail(LOOKBACK)
+    y_pred_norm, y_pred_price, y_pred_price_cal = predict_from_dataframe(df)
 
-            return {
-                "prediction_normalized": float(y_pred_norm),
-                "prediction_price": float(y_pred_price),
-                "prediction_price_calibrated": float(y_pred_price_cal),
-                "lookback_used": LOOKBACK,
-            }
-        except HTTPException:
-            REQ_ERRORS.labels(path_label).inc()
-            raise
-        except Exception:
-            REQ_ERRORS.labels(path_label).inc()
-            raise
+    return {
+        "prediction_normalized": float(y_pred_norm),
+        "prediction_price": float(y_pred_price),
+        "prediction_price_calibrated": float(y_pred_price_cal),
+        "lookback_used": LOOKBACK,
+    }
 
 @app.get(
     "/predict_live",
@@ -262,51 +227,50 @@ def predict_live(ticker: str = "AMZN"):
     Busca dados recentes do yfinance, gera features e retorna previsão usando somente dados online.
     - `ticker`: símbolo (default AMZN).
     """
-    path_label = "/predict_live"
-    with REQ_LATENCY.labels(path_label).time():
-        # Tenta baixar do yfinance com a mesma configuração do treino_notbook
-        end_date = datetime.now(timezone.utc).date()
-        # Baixa mais dias corridos para compensar dias sem pregão e perdas por rolling/dropna
-        start_date = end_date - timedelta(days=max(LOOKBACK * 4, 90))
+    # Tenta baixar do yfinance com a mesma configuração do treino_notbook
+    end_date = datetime.now(timezone.utc).date()
+    # Baixa mais dias corridos para compensar dias sem pregão e perdas por rolling/dropna
+    start_date = end_date - timedelta(days=max(LOOKBACK * 4, 90))
 
-        df_raw = yf.download(
-            tickers=ticker,
-            start=start_date.isoformat(),
-            end=(end_date + timedelta(days=1)).isoformat(),  # end é exclusivo
-            interval="1d",
-            auto_adjust=True,
-            actions=True,
-            group_by="column",
-            progress=False,
-            threads=True,
+    df_raw = yf.download(
+        tickers=ticker,
+        start=start_date.isoformat(),
+        end=(end_date + timedelta(days=1)).isoformat(),  # end é exclusivo
+        interval="1d",
+        auto_adjust=True,
+        actions=True,
+        group_by="column",
+        progress=False,
+        threads=True,
+    )
+   
+    if df_raw is None or df_raw.empty:
+        logger.error(
+            "yfinance retornou vazio",
+            extra={"ticker": ticker, "start": start_date.isoformat(), "end": end_date.isoformat()},
         )
-       
-        if df_raw is None or df_raw.empty:
-            logger.error(
-                "yfinance retornou vazio",
-                extra={"ticker": ticker, "start": start_date.isoformat(), "end": end_date.isoformat()},
-            )
-            REQ_ERRORS.labels(path_label).inc()
-            raise HTTPException(status_code=500, detail="Sem dados retornados do yfinance.")
+        raise HTTPException(status_code=500, detail="Sem dados retornados do yfinance.")
 
-        try:
-            # Normaliza colunas como no notebook antes de gerar features
-            df_feat = build_features(df_raw)
-            y_pred_norm, y_pred_price, y_pred_price_cal = predict_from_dataframe(df_feat)
-        except Exception as exc:
-            REQ_ERRORS.labels(path_label).inc()
-            raise HTTPException(status_code=500, detail=str(exc))
+    try:
+        # Normaliza colunas como no notebook antes de gerar features
+        df_feat = build_features(df_raw)
+        y_pred_norm, y_pred_price, y_pred_price_cal = predict_from_dataframe(df_feat)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
 
-        return {
-            "ticker": ticker,
-            "rows_used": LOOKBACK,
-            "prediction_normalized": float(y_pred_norm),
-            "prediction_price": float(y_pred_price),
-            "prediction_price_calibrated": float(y_pred_price_cal),
-            "features_rows_available": int(len(df_feat)),
-            "source": "yfinance",
-        }
+    return {
+        "ticker": ticker,
+        "rows_used": LOOKBACK,
+        "prediction_normalized": float(y_pred_norm),
+        "prediction_price": float(y_pred_price),
+        "prediction_price_calibrated": float(y_pred_price_cal),
+        "features_rows_available": int(len(df_feat)),
+        "source": "yfinance",
+    }
 
+@app.get("/sentry-debug")
+def sentry_debug():
+    raise RuntimeError("teste sentry")
 
 if __name__ == "__main__":
 
