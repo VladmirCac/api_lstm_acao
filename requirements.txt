@@ -10,3 +10,4 @@ yfinance
 curl-cffi
 python-dotenv
 sentry-sdk[fastapi]
+psutil

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
 import logging
+from time import perf_counter
 import curl_cffi.requests.impersonate as curl_impersonate
 import joblib
 import numpy as np
@@ -18,6 +19,8 @@ from pydantic import BaseModel, Field
 import uvicorn
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
+import psutil
+from sentry_sdk import metrics
 
 load_dotenv()  # carrega variáveis de ambiente locais (.env) para testes
 
@@ -110,6 +113,41 @@ app = FastAPI(
         "- As colunas esperadas estão em /health."
     ),
 )
+
+PROCESS = psutil.Process()
+
+
+@app.middleware("http")
+async def sentry_resource_metrics(request, call_next):
+    start = perf_counter()
+    cpu_start = PROCESS.cpu_times()
+    response = None
+    try:
+        response = await call_next(request)
+        return response
+    finally:
+        # CPU em milissegundos e memória em MB no fim da requisição
+        cpu_end = PROCESS.cpu_times()
+        cpu_ms = (cpu_end.user - cpu_start.user + cpu_end.system - cpu_start.system) * 1000
+        mem_mb = PROCESS.memory_info().rss / (1024 * 1024)
+        duration_ms = (perf_counter() - start) * 1000
+        path = request.url.path
+        method = request.method
+        status = getattr(response, "status_code", 500)
+
+        sentry_sdk.set_measurement("request.duration", duration_ms, unit="millisecond")
+        sentry_sdk.set_measurement("request.cpu", cpu_ms, unit="millisecond")
+        sentry_sdk.set_measurement("request.mem", mem_mb, unit="megabyte")
+        with sentry_sdk.configure_scope() as scope:
+            scope.set_tag("http.path", path)
+            scope.set_tag("http.method", method)
+            scope.set_tag("http.status_code", status)
+
+        # Envia métricas agregáveis para a aba Metrics do Sentry
+        base_tags = {"path": path, "method": method, "status": str(status)}
+        metrics.distribution("api.request.duration_ms", duration_ms, tags=base_tags, unit="millisecond")
+        metrics.distribution("api.request.cpu_ms", cpu_ms, tags=base_tags, unit="millisecond")
+        metrics.gauge("api.process.mem_mb", mem_mb, tags={"path": path, "method": method}, unit="megabyte")
 
 
 def invert_scale(values: np.ndarray) -> np.ndarray:
