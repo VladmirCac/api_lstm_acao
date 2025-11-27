@@ -28,7 +28,6 @@ from prometheus_client import (
 )
 
 load_dotenv()  # carrega variáveis de ambiente locais (.env) para testes
-os.environ.setdefault("PROMETHEUS_DISABLE_OPENMETRICS", "1")  # força formato 0.0.4
 
 # Paths for artifacts
 ARTEFACT_DIR = Path("artifacts")
