@@ -18,7 +18,6 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import uvicorn
 import sentry_sdk
-from sentry_sdk.integrations.fastapi import FastApiIntegration
 import psutil
 
 load_dotenv()  # carrega variáveis de ambiente locais (.env) para testes
