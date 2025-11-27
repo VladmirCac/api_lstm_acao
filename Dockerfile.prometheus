@@ -1,3 +1,12 @@
 FROM prom/prometheus:latest
 
 COPY prometheus.yml /etc/prometheus/prometheus.yml
+
+# Ajusta a porta de escuta para o valor de $PORT (Railway define), padrão 9090.
+# Usamos shell form para expandir a variável de ambiente.
+CMD /bin/sh -c 'exec /bin/prometheus \
+  --config.file=/etc/prometheus/prometheus.yml \
+  --storage.tsdb.path=/prometheus \
+  --web.console.libraries=/usr/share/prometheus/console_libraries \
+  --web.console.templates=/usr/share/prometheus/consoles \
+  --web.listen-address=":${PORT:-9090}"'
