@@ -22,9 +22,19 @@ import psutil
 
 load_dotenv()  # carrega variáveis de ambiente locais (.env) para testes
 
+
+def traces_sampler(sampling_context):
+    """Evita coletar transações de sondagens /metrics."""
+    scope = sampling_context.get("asgi_scope") or {}
+    path = scope.get("path")
+    if path == "/metrics":
+        return 0.0
+    return 1.0
+
+
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN"),
-    traces_sample_rate=1.0,
+    traces_sampler=traces_sampler,
     profile_session_sample_rate=1.0,
     environment=os.getenv("SENTRY_ENVIRONMENT"),
     enable_logs=True,
