@@ -1,5 +1,6 @@
 import os
-os.environ.setdefault("PROMETHEUS_DISABLE_OPENMETRICS", "1")  # força formato 0.0.4
+import secrets
+from dotenv import load_dotenv
 
 import json
 from pathlib import Path
@@ -13,7 +14,8 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 import yfinance as yf
-from fastapi import FastAPI, HTTPException, Response
+from fastapi import FastAPI, HTTPException, Response, Depends
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 import uvicorn
 from prometheus_client import (
@@ -24,6 +26,9 @@ from prometheus_client import (
     generate_latest,
     CONTENT_TYPE_LATEST,
 )
+
+load_dotenv()  # carrega variáveis de ambiente locais (.env) para testes
+os.environ.setdefault("PROMETHEUS_DISABLE_OPENMETRICS", "1")  # força formato 0.0.4
 
 # Paths for artifacts
 ARTEFACT_DIR = Path("artifacts")
@@ -59,6 +64,19 @@ if "request_errors_total" in REGISTRY._names_to_collectors:
     REQ_ERRORS = REGISTRY._names_to_collectors["request_errors_total"]
 else:
     REQ_ERRORS = Counter("request_errors_total", "Erros por rota", ["path"])
+
+# Credenciais para /metrics (opcional)
+METRICS_USER = os.getenv("METRICS_USER")
+METRICS_PASS = os.getenv("METRICS_PASS")
+security = HTTPBasic()
+
+def _check_metrics_auth(credentials: HTTPBasicCredentials = Depends(security)):
+    if METRICS_USER and METRICS_PASS:
+        user_ok = secrets.compare_digest(credentials.username, METRICS_USER)
+        pass_ok = secrets.compare_digest(credentials.password, METRICS_PASS)
+        if not (user_ok and pass_ok):
+            raise HTTPException(status_code=401, detail="Invalid credentials")
+    return True
 
 try:
     ProcessCollector()  # CPU/memória do processo
@@ -206,7 +224,7 @@ def health():
     summary="Métricas Prometheus",
     response_description="Métricas no formato Prometheus",
 )
-def metrics():
+def metrics(_: bool = Depends(_check_metrics_auth)):
     # Expoe métricas na mesma porta da API (necessário em ambientes que não suportam porta extra)
     data = generate_latest(REGISTRY)
     return Response(content=data, media_type=CONTENT_TYPE_LATEST)

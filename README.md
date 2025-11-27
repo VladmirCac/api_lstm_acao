@@ -25,6 +25,8 @@ Endpoints:
 - Commit/push para o GitHub e conecte o repositório no Railway; configure a branch de deploy.
 - Certifique-se de que `artifacts/` está versionada ou disponível em um Volume.
 - Métricas Prometheus expostas em `/metrics` (mesma porta da API).
+- Autenticação opcional em `/metrics`: defina envs `METRICS_USER` e `METRICS_PASS`.
+- Para testes locais, copie `.env.example` para `.env` e ajuste as credenciais; o `serve.py` carrega automaticamente.
 
 ## Deploy via Docker
 - Build: `docker build -t lstm-api .`
