@@ -268,10 +268,6 @@ def predict_live(ticker: str = "AMZN"):
         "source": "yfinance",
     }
 
-@app.get("/sentry-debug")
-def sentry_debug():
-    raise RuntimeError("teste sentry")
-
 if __name__ == "__main__":
 
     uvicorn.run("serve:app", host="0.0.0.0", port=8000, reload=False)
