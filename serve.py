@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault("PROMETHEUS_DISABLE_OPENMETRICS", "1")  # força formato 0.0.4
+
 import json
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
