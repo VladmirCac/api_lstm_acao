@@ -8,7 +8,6 @@ from typing import Dict, List
 
 import logging
 from time import perf_counter
-import curl_cffi.requests.impersonate as curl_impersonate
 import joblib
 import numpy as np
 import pandas as pd
@@ -20,21 +19,11 @@ import uvicorn
 import sentry_sdk
 import psutil
 
-load_dotenv()  # carrega variáveis de ambiente locais (.env) para testes
-
-
-def traces_sampler(sampling_context):
-    """Evita coletar transações de sondagens /metrics."""
-    scope = sampling_context.get("asgi_scope") or {}
-    path = scope.get("path")
-    if path == "/metrics":
-        return 0.0
-    return 1.0
-
+load_dotenv() 
 
 sentry_sdk.init(
     dsn=os.getenv("SENTRY_DSN"),
-    traces_sampler=traces_sampler,
+    traces_sampler=1,
     profile_session_sample_rate=1.0,
     environment=os.getenv("SENTRY_ENVIRONMENT"),
     enable_logs=True,
@@ -48,10 +37,6 @@ METADATA_PATH = ARTEFACT_DIR / "metadata.json"
 MODEL_PATH = ARTEFACT_DIR / "lstm_model.keras"
 SCALER_PATH = ARTEFACT_DIR / "scaler.pkl"
 CALIBRATOR_PATH = ARTEFACT_DIR / "calibrator.pkl"
-
-# Ajusta fingerprint padrão do curl_cffi para evitar ImpersonateError (chrome136 não suportado aqui)
-curl_impersonate.DEFAULT_CHROME = "chrome120"
-curl_impersonate.REAL_TARGET_MAP["chrome"] = "chrome120"
 
 logger = logging.getLogger("predict_live")
 YF_CACHE_DIR = ARTEFACT_DIR / "yf_cache"
@@ -112,6 +97,7 @@ def load_artifacts():
 
 
 model, scaler, calibrator, FEATURE_ORDER, LOOKBACK, CLOSE_IDX = load_artifacts()
+
 app = FastAPI(
     title="LSTM Forecast API",
     version="0.1.0",
