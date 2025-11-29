@@ -3,16 +3,13 @@ from dotenv import load_dotenv
 
 import json
 from pathlib import Path
-from datetime import datetime, timedelta, timezone
 from typing import Dict, List
 
-import logging
 from time import perf_counter
 import joblib
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import yfinance as yf
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import uvicorn
@@ -37,17 +34,6 @@ METADATA_PATH = ARTEFACT_DIR / "metadata.json"
 MODEL_PATH = ARTEFACT_DIR / "lstm_model.keras"
 SCALER_PATH = ARTEFACT_DIR / "scaler.pkl"
 CALIBRATOR_PATH = ARTEFACT_DIR / "calibrator.pkl"
-
-logger = logging.getLogger("predict_live")
-YF_CACHE_DIR = ARTEFACT_DIR / "yf_cache"
-YF_CACHE_DIR.mkdir(exist_ok=True, parents=True)
-try:
-    # Evita erros de "readonly database" em cache padrão
-    yf.set_tz_cache_location(str(YF_CACHE_DIR))
-    from yfinance.cache import _TzDBManager
-    _TzDBManager.set_location(str(YF_CACHE_DIR))
-except Exception as exc:
-    logger.warning("Falha ao configurar cache do yfinance: %s", exc)
 
 class PredictRequest(BaseModel):
     """
@@ -241,57 +227,6 @@ def predict(req: PredictRequest):
         "prediction_price": float(y_pred_price),
         "prediction_price_calibrated": float(y_pred_price_cal),
         "lookback_used": LOOKBACK,
-    }
-
-@app.get(
-    "/predict_live",
-    summary="Prever usando dados recentes do yfinance",
-    response_description="Previsão normalizada, em preço e calibrada",
-)
-def predict_live(ticker: str = "AMZN"):
-    """
-    Busca dados recentes do yfinance, gera features e retorna previsão usando somente dados online.
-    - `ticker`: símbolo (default AMZN).
-    """
-    # Tenta baixar do yfinance com a mesma configuração do treino_notbook
-    end_date = datetime.now(timezone.utc).date()
-    # Baixa mais dias corridos para compensar dias sem pregão e perdas por rolling/dropna
-    start_date = end_date - timedelta(days=max(LOOKBACK * 4, 90))
-
-    df_raw = yf.download(
-        tickers=ticker,
-        start=start_date.isoformat(),
-        end=(end_date + timedelta(days=1)).isoformat(),  # end é exclusivo
-        interval="1d",
-        auto_adjust=True,
-        actions=True,
-        group_by="column",
-        progress=False,
-        threads=True,
-    )
-   
-    if df_raw is None or df_raw.empty:
-        logger.error(
-            "yfinance retornou vazio",
-            extra={"ticker": ticker, "start": start_date.isoformat(), "end": end_date.isoformat()},
-        )
-        raise HTTPException(status_code=500, detail="Sem dados retornados do yfinance.")
-
-    try:
-        # Normaliza colunas como no notebook antes de gerar features
-        df_feat = build_features(df_raw)
-        y_pred_norm, y_pred_price, y_pred_price_cal = predict_from_dataframe(df_feat)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
-
-    return {
-        "ticker": ticker,
-        "rows_used": LOOKBACK,
-        "prediction_normalized": float(y_pred_norm),
-        "prediction_price": float(y_pred_price),
-        "prediction_price_calibrated": float(y_pred_price_cal),
-        "features_rows_available": int(len(df_feat)),
-        "source": "yfinance",
     }
 
 if __name__ == "__main__":
