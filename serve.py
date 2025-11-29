@@ -44,26 +44,25 @@ class PredictRequest(BaseModel):
         ...,
         description="Lista cronológica com pelo menos 20 registros, contendo as colunas esperadas (veja /health).",
         json_schema_extra={
-            "example": {
-                "rows": [
-                    {
-                        "open_amzn": 155.02,
-                        "high_amzn": 156.71,
-                        "low_amzn": 154.31,
-                        "close_amzn": 155.90,
-                        "volume_amzn": 72042000,
-                        "return_1d": 0.0012,
-                        "return_5d": 0.0098,
-                        "ma_5": 155.4,
-                        "ma_10": 154.9,
-                        "ma_20": 154.2,
-                        "vol_10": 0.011,
-                        "price_range": 0.014,
-                        "volume_trend": 0.02,
-                    }
-                ]
-                * 20,
-            }
+            # Exemplo direto do corpo da requisição (sem rows aninhado)
+            "example": [
+                {
+                    "open_amzn": 155.02,
+                    "high_amzn": 156.71,
+                    "low_amzn": 154.31,
+                    "close_amzn": 155.90,
+                    "volume_amzn": 72042000,
+                    "return_1d": 0.0012,
+                    "return_5d": 0.0098,
+                    "ma_5": 155.4,
+                    "ma_10": 154.9,
+                    "ma_20": 154.2,
+                    "vol_10": 0.011,
+                    "price_range": 0.014,
+                    "volume_trend": 0.02,
+                }
+            ]
+            * 20,
         },
     )
 
