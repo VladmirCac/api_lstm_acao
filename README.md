@@ -14,7 +14,6 @@ uvicorn serve:app --host 0.0.0.0 --port 8000
 Endpoints:
 - `/health` – status e lista de features esperadas.
 - `/predict` – POST com JSON contendo `rows` (mínimo LOOKBACK linhas com as colunas de `FEATURE_ORDER`).
-- `/predict_live` – GET, baixa dados do yfinance para o ticker (default AMZN), gera features e retorna previsão.
 
 ## Estrutura principal
 - `serve.py`: carrega artefatos, monta features, aplica scaler, prediz e calibra. Expõe rotas FastAPI.
